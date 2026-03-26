@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Sensor Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #e94560;
+        }
+        .cards {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px 30px;
+            text-align: center;
+            min-width: 180px;
+        }
+        .card .value {
+            font-size: 2.2em;
+            font-weight: bold;
+            color: #0f3460;
+        }
+        .card.temp .value { color: #e94560; }
+        .card.hum  .value { color: #00b4d8; }
+        .card.pres .value { color: #48cae4; }
+        .card .label {
+            font-size: 0.9em;
+            color: #999;
+            margin-top: 5px;
+        }
+        .chart-container {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        canvas { width: 100% !important; }
+        .status {
+            text-align: center;
+            color: #666;
+            font-size: 0.8em;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>ESP32 Sensor Monitor</h1>
+
+    <div class="cards">
+        <div class="card temp">
+            <div class="value" id="temp">--</div>
+            <div class="label">Temperature (°C)</div>
+        </div>
+        <div class="card hum">
+            <div class="value" id="hum">--</div>
+            <div class="label">Humidity (%)</div>
+        </div>
+        <div class="card pres">
+            <div class="value" id="pres">--</div>
+            <div class="label">Pressure (hPa)</div>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="tempChart" height="80"></canvas>
+    </div>
+    <div class="chart-container">
+        <canvas id="humChart" height="80"></canvas>
+    </div>
+    <div class="chart-container">
+        <canvas id="presChart" height="80"></canvas>
+    </div>
+
+    <div class="status" id="status">Loading...</div>
+
+    <script>
+        const MAX_POINTS = 100;
+
+        // Chart config helper
+        function makeChart(ctx, label, color, yLabel) {
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: label,
+                        data: [],
+                        borderColor: color,
+                        backgroundColor: color + '22',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    animation: false,
+                    scales: {
+                        x: {
+                            display: true,
+                            ticks: { color: '#666', maxTicksLimit: 10 },
+                            grid: { color: '#333' }
+                        },
+                        y: {
+                            display: true,
+                            title: { display: true, text: yLabel, color: '#999' },
+                            ticks: { color: '#666' },
+                            grid: { color: '#333' }
+                        }
+                    },
+                    plugins: {
+                        legend: { labels: { color: '#ccc' } }
+                    }
+                }
+            });
+        }
+
+        const tempChart = makeChart(
+            document.getElementById('tempChart'), 'Temperature', '#e94560', '°C');
+        const humChart = makeChart(
+            document.getElementById('humChart'), 'Humidity', '#00b4d8', '%');
+        const presChart = makeChart(
+            document.getElementById('presChart'), 'Pressure', '#48cae4', 'hPa');
+
+        // Load history on page load
+        async function loadHistory() {
+            try {
+                const res = await fetch('/api/history?limit=100');
+                const data = await res.json();
+
+                for (const r of data) {
+                    const t = r.timestamp.split('T')[1].split('.')[0];
+                    pushData(tempChart, t, r.temperature);
+                    pushData(humChart,  t, r.humidity);
+                    pushData(presChart, t, r.pressure);
+                }
+                tempChart.update();
+                humChart.update();
+                presChart.update();
+            } catch (e) {
+                console.error('Failed to load history:', e);
+            }
+        }
+
+        function pushData(chart, label, value) {
+            chart.data.labels.push(label);
+            chart.data.datasets[0].data.push(value);
+            if (chart.data.labels.length > MAX_POINTS) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+        }
+
+        // Poll latest data every 5 seconds
+        async function fetchLatest() {
+            try {
+                const res = await fetch('/api/latest');
+                const data = await res.json();
+
+                if (data.temperature !== undefined) {
+                    document.getElementById('temp').textContent = data.temperature.toFixed(1);
+                    document.getElementById('hum').textContent  = data.humidity.toFixed(1);
+                    document.getElementById('pres').textContent = data.pressure.toFixed(1);
+
+                    const now = new Date().toLocaleTimeString();
+                    pushData(tempChart, now, data.temperature);
+                    pushData(humChart,  now, data.humidity);
+                    pushData(presChart, now, data.pressure);
+
+                    tempChart.update();
+                    humChart.update();
+                    presChart.update();
+
+                    document.getElementById('status').textContent =
+                        'Last update: ' + now + ' | Uptime: ' + data.uptime_s + 's';
+                }
+            } catch (e) {
+                document.getElementById('status').textContent = 'Connection error';
+            }
+        }
+
+        loadHistory();
+        setInterval(fetchLatest, 5000);
+    </script>
+</body>
+</html>
