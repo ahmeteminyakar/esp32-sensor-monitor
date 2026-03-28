@@ -11,3 +11,4 @@ server/*.db
 
 # Environment
 .env
+CLAUDE.md
